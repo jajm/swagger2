@@ -116,7 +116,7 @@ sub _path_request_to_string {
 
   $str .= sprintf "=head3 Parameters\n\n";
   $str .= (@table == 1) ? "This resource takes no parameters.\n\n" : sprintf "%s\n", _ascii_table(\@table, '  ');
-  $str .= "  $body{name}:\n\n" . $self->_schema_to_string_dispatch($body{schema}, 0) . "\n" if %body;
+  $str .= "  $body{name}:\n\n" . $self->_schema_to_string_dispatch($body{schema}, 1) . "\n" if %body;
   $str;
 }
 
@@ -131,7 +131,7 @@ sub _path_response_to_string {
     my $res = $responses->{$code};
     $str .= sprintf "=head4 %s\n\n", _status_code_to_string($code);
     $str .= $self->_summary_and_description($res);
-    $str .= $self->_schema_to_string_dispatch($res->{schema}, 0) . "\n";
+    $str .= $self->_schema_to_string_dispatch($res->{schema}, 1) . "\n";
   }
 
   return $str;
@@ -185,7 +185,8 @@ sub _schema_array_to_string {
 
   $description = $description eq NO_DESCRIPTION ? "" : "// $description";
 
-  $str .= _sprintf($depth, "[%s\n", $description);
+  $str .= _sprintf($depth == 1 ? 1 : 0, "[%s\n", $description);
+  $str .= _sprintf($depth + 1, "");
   $str .= $self->_schema_to_string_dispatch($schema->{items}, $depth + 1);
   $str .= _sprintf($depth + 1, "...\n");
   $str .= _sprintf($depth,     "]\n");
@@ -222,11 +223,11 @@ sub _schema_object_to_string {
   my $str = '';
 
   $description = $description eq NO_DESCRIPTION ? "" : "// $description";
-  $str .= _sprintf($depth, "{%s\n", $description);
+  $str .= _sprintf($depth == 1 ? 1 : 0, "{%s\n", $description);
 
-  for my $k (sort keys %$schema) {
+  for my $k (sort keys %{$schema->{properties}}) {
     $str .= _sprintf($depth + 1, qq("%s": ), $k);
-    $str .= $self->_schema_to_string_dispatch($schema->{$k}, $depth + 1);
+    $str .= $self->_schema_to_string_dispatch($schema->{properties}->{$k}, $depth + 1);
   }
 
   $str .= _sprintf($depth, "},\n");
@@ -240,19 +241,66 @@ sub _schema_string_to_string {
     _type_description($schema, qw( minLength maxLength pattern default ));
 }
 
+sub _schema_anyof_to_string {
+  my ($self, $schema, $depth) = @_;
+
+  my $str = '';
+
+  $str .= "Any of the following:\n";
+  foreach my $s (@{$schema->{anyOf}}) {
+    $str .= _sprintf($depth + 1, "");
+    $str .= $self->_schema_to_string_dispatch($s, $depth + 1);
+  }
+
+  $str;
+}
+
+sub _schema_allof_to_string {
+  my ($self, $schema, $depth) = @_;
+
+  my $str = '';
+
+  $str .= "All of the following:\n";
+  foreach my $s (@{$schema->{allOf}}) {
+    $str .= _sprintf($depth + 1, "");
+    $str .= $self->_schema_to_string_dispatch($s, $depth + 1);
+  }
+
+  $str;
+}
+
+sub _schema_oneof_to_string {
+  my ($self, $schema, $depth) = @_;
+
+  my $str = '';
+
+  $str .= "One of the following:\n";
+  foreach my $s (@{$schema->{oneOf}}) {
+    $str .= _sprintf($depth + 1, "");
+    $str .= $self->_schema_to_string_dispatch($s, $depth + 1);
+  }
+
+  $str;
+}
+
 sub _schema_to_string_dispatch {
   my ($self, $schema, $depth) = @_;
   my $required = $schema->{required};
   my $method;
 
-  if ($schema->{properties}) {
-    $schema = $schema->{properties};
-  }
-  if ($required and ref $required eq 'ARRAY') {
-    $schema->{$_}{required} = 1 for @$required;
+  if ($required and ref $required eq 'ARRAY' and $schema->{properties}) {
+    $schema->{properties}{$_}{required} = 1 for @$required;
   }
 
-  $method = '_schema_' . ($schema->{type} || 'object') . '_to_string';
+  if ($schema->{anyOf}) {
+    $method = '_schema_anyof_to_string';
+  } elsif ($schema->{allOf}) {
+    $method = '_schema_allof_to_string';
+  } elsif ($schema->{oneOf}) {
+    $method = '_schema_oneof_to_string';
+  } else {
+    $method = '_schema_' . ($schema->{type} || 'object') . '_to_string';
+  }
   return "Cannot translate '$schema->{type}' into POD." unless $self->can($method);
   return $self->$method($schema, $depth);
 }
@@ -295,7 +343,7 @@ sub _ascii_table {
 sub _sprintf {
   my ($level, $format, @args) = @_;
 
-  sprintf "%s$format", (" " x (($level + 1) * 2)), @args;
+  sprintf "%s$format", (" " x (($level) * 2)), @args;
 }
 
 sub _status_code_to_string {
